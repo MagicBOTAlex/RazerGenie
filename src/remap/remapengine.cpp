@@ -64,23 +64,31 @@ RemapEngine::~RemapEngine()
 
 void RemapEngine::configure(const QString &deviceName, bool enabled, int hyperButton, int turboRateHz)
 {
-    const bool needsRestart = enabled != m_enabled || deviceName != m_deviceName || hyperButton != m_hyperButton
-        || turboRateHz != m_turboRateHz;
+    const bool stateChanged = enabled != m_enabled || deviceName != m_deviceName;
+    const bool rateChanged = turboRateHz != m_turboRateHz;
 
     m_deviceName = deviceName;
     m_enabled = enabled;
     m_hyperButton = hyperButton;
     m_turboRateHz = turboRateHz > 0 ? turboRateHz : 1;
 
-    if (!needsRestart && isRunning()) {
+    if (stateChanged) {
+        if (m_enabled) {
+            start();
+        } else {
+            stop();
+            setStatus(QObject::tr("Disabled"));
+        }
         return;
     }
 
-    if (m_enabled) {
+    if (m_enabled && !isRunning()) {
         start();
-    } else {
-        stop();
-        setStatus(QObject::tr("Disabled"));
+        return;
+    }
+
+    if (rateChanged && m_turboTimer && m_turboTimer->isActive()) {
+        m_turboTimer->start(1000 / (2 * m_turboRateHz));
     }
 }
 

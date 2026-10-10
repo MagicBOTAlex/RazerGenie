@@ -116,6 +116,12 @@ DpiSliderWidget::DpiSliderWidget(QWidget *parent, libopenrazer::Device *device)
 
                 try {
                     device->setDPIStages(activeStage, dpiStages);
+                    if (activeStage >= 1 && activeStage <= dpiStages.size()) {
+                        openrazer::DPI activeDpi = dpiStages[activeStage - 1];
+                        if (activeDpi.dpi_x != 0 && activeDpi.dpi_y != 0) {
+                            device->setDPI(activeDpi);
+                        }
+                    }
                 } catch (const libopenrazer::DBusException &e) {
                     qWarning("Failed to set DPI");
                     util::showError(tr("Failed to set DPI"));
@@ -144,6 +150,12 @@ DpiSliderWidget::DpiSliderWidget(QWidget *parent, libopenrazer::Device *device)
 
                     try {
                         device->setDPIStages(activeStage, dpiStages);
+                        if (activeStage >= 1 && activeStage <= dpiStages.size()) {
+                            openrazer::DPI activeDpi = dpiStages[activeStage - 1];
+                            if (activeDpi.dpi_x != 0 && activeDpi.dpi_y != 0) {
+                                device->setDPI(activeDpi);
+                            }
+                        }
                     } catch (const libopenrazer::DBusException &e) {
                         qWarning("Failed to set DPI stages");
                         util::showError(tr("Failed to set DPI stages"));
