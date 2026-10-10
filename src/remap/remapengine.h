@@ -8,17 +8,14 @@
 #include <QObject>
 #include <QString>
 
+#include <atomic>
+#include <mutex>
+#include <thread>
+
 struct input_event;
 
 class QSocketNotifier;
-class QTimer;
 
-// Userspace input remapping engine.
-//
-// When enabled it grabs the mouse's main evdev node (via EVIOCGRAB), clones it
-// as a uinput device and forwards all events through the clone. While the
-// configured "hyper" button is held, the left/right mouse buttons are turned
-// into click-turbos (auto-fire) instead of being passed through unchanged.
 class RemapEngine : public QObject
 {
     Q_OBJECT
@@ -45,9 +42,11 @@ private:
     bool createVirtualDevice(int srcFd);
 
     void onActivated();
-    void onTurboTick();
+    void startTurbo(int button);
     void stopTurbo();
+    void turboLoop();
 
+    void writeEvent(const input_event &ev);
     void passEvent(const input_event &ev);
     void emitEvent(unsigned short type, unsigned short code, int value);
     void sync();
@@ -56,19 +55,23 @@ private:
 
     QString m_deviceName;
     bool m_enabled = false;
-    int m_hyperButton = 0x113; // BTN_SIDE
+    int m_hyperButton = 0x113;
     int m_turboRateHz = 15;
 
     int m_fd = -1;
     int m_ufd = -1;
     QSocketNotifier *m_notifier = nullptr;
-    QTimer *m_turboTimer = nullptr;
 
     bool m_hyperDown = false;
     bool m_physLeft = false;
     bool m_physRight = false;
     int m_turboButton = 0;
-    bool m_turboPhaseDown = false;
+
+    std::thread m_turboThread;
+    std::atomic<bool> m_turboRun{ false };
+    std::atomic<int> m_turboCode{ 0 };
+    std::atomic<int> m_turboRateAtomic{ 15 };
+    std::mutex m_writeMutex;
 
     QString m_status;
 };

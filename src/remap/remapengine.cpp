@@ -7,10 +7,11 @@
 #include <QCoreApplication>
 #include <QDebug>
 #include <QSocketNotifier>
-#include <QTimer>
 
-#include <cstring>
+#include <algorithm>
 #include <cerrno>
+#include <chrono>
+#include <cstring>
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
@@ -65,12 +66,12 @@ RemapEngine::~RemapEngine()
 void RemapEngine::configure(const QString &deviceName, bool enabled, int hyperButton, int turboRateHz)
 {
     const bool stateChanged = enabled != m_enabled || deviceName != m_deviceName;
-    const bool rateChanged = turboRateHz != m_turboRateHz;
 
     m_deviceName = deviceName;
     m_enabled = enabled;
     m_hyperButton = hyperButton;
     m_turboRateHz = turboRateHz > 0 ? turboRateHz : 1;
+    m_turboRateAtomic.store(m_turboRateHz);
 
     if (stateChanged) {
         if (m_enabled) {
@@ -84,11 +85,6 @@ void RemapEngine::configure(const QString &deviceName, bool enabled, int hyperBu
 
     if (m_enabled && !isRunning()) {
         start();
-        return;
-    }
-
-    if (rateChanged && m_turboTimer && m_turboTimer->isActive()) {
-        m_turboTimer->start(1000 / (2 * m_turboRateHz));
     }
 }
 
@@ -195,7 +191,6 @@ bool RemapEngine::createVirtualDevice(int srcFd)
         }
     }
 
-    // Make sure the buttons we synthesize are always available.
     ::ioctl(m_ufd, UI_SET_EVBIT, EV_KEY);
     ::ioctl(m_ufd, UI_SET_KEYBIT, BTN_LEFT);
     ::ioctl(m_ufd, UI_SET_KEYBIT, BTN_RIGHT);
@@ -265,15 +260,10 @@ bool RemapEngine::start()
     m_notifier = new QSocketNotifier(m_fd, QSocketNotifier::Read, this);
     connect(m_notifier, &QSocketNotifier::activated, this, &RemapEngine::onActivated);
 
-    m_turboTimer = new QTimer(this);
-    m_turboTimer->setTimerType(Qt::PreciseTimer);
-    connect(m_turboTimer, &QTimer::timeout, this, &RemapEngine::onTurboTick);
-
     m_hyperDown = false;
     m_physLeft = false;
     m_physRight = false;
     m_turboButton = 0;
-    m_turboPhaseDown = false;
 
     setStatus(tr("Active on %1").arg(node));
     return true;
@@ -281,9 +271,8 @@ bool RemapEngine::start()
 
 void RemapEngine::stop()
 {
-    if (m_turboTimer) {
-        m_turboTimer->stop();
-    }
+    stopTurbo();
+
     if (m_notifier) {
         m_notifier->setEnabled(false);
         delete m_notifier;
@@ -299,36 +288,77 @@ void RemapEngine::stop()
         ::close(m_fd);
         m_fd = -1;
     }
-    m_turboButton = 0;
-    m_turboPhaseDown = false;
     m_hyperDown = false;
     m_physLeft = false;
     m_physRight = false;
 }
 
-void RemapEngine::passEvent(const input_event &ev)
+void RemapEngine::writeEvent(const input_event &ev)
 {
+    std::lock_guard<std::mutex> lock(m_writeMutex);
     if (m_ufd >= 0) {
         [[maybe_unused]] ssize_t written = ::write(m_ufd, &ev, sizeof(ev));
     }
 }
 
+void RemapEngine::passEvent(const input_event &ev)
+{
+    writeEvent(ev);
+}
+
 void RemapEngine::emitEvent(unsigned short type, unsigned short code, int value)
 {
-    if (m_ufd < 0) {
-        return;
-    }
     struct input_event ev;
     ::memset(&ev, 0, sizeof(ev));
     ev.type = type;
     ev.code = code;
     ev.value = value;
-    [[maybe_unused]] ssize_t written = ::write(m_ufd, &ev, sizeof(ev));
+    writeEvent(ev);
 }
 
 void RemapEngine::sync()
 {
     emitEvent(EV_SYN, SYN_REPORT, 0);
+}
+
+void RemapEngine::startTurbo(int button)
+{
+    if (m_turboRun.load() && m_turboCode.load() == button) {
+        return;
+    }
+    stopTurbo();
+
+    m_turboButton = button;
+    m_turboCode.store(button);
+    m_turboRateAtomic.store(m_turboRateHz);
+    m_turboRun.store(true);
+    m_turboThread = std::thread(&RemapEngine::turboLoop, this);
+}
+
+void RemapEngine::stopTurbo()
+{
+    m_turboRun.store(false);
+    if (m_turboThread.joinable()) {
+        m_turboThread.join();
+    }
+    m_turboButton = 0;
+}
+
+void RemapEngine::turboLoop()
+{
+    const int button = m_turboCode.load();
+    while (m_turboRun.load()) {
+        const int rate = std::max(1, m_turboRateAtomic.load());
+        const int halfUs = std::max(1, 1000000 / rate / 2);
+
+        emitEvent(EV_KEY, button, 1);
+        sync();
+        std::this_thread::sleep_for(std::chrono::microseconds(halfUs));
+
+        emitEvent(EV_KEY, button, 0);
+        sync();
+        std::this_thread::sleep_for(std::chrono::microseconds(halfUs));
+    }
 }
 
 void RemapEngine::onActivated()
@@ -349,14 +379,7 @@ void RemapEngine::onActivated()
 
             if (m_hyperDown) {
                 if (down) {
-                    if (m_turboButton != ev.code) {
-                        stopTurbo();
-                        m_turboButton = ev.code;
-                        m_turboPhaseDown = true;
-                        emitEvent(EV_KEY, ev.code, 1);
-                        sync();
-                        m_turboTimer->start(1000 / (2 * m_turboRateHz));
-                    }
+                    startTurbo(ev.code);
                 } else if (m_turboButton == ev.code) {
                     stopTurbo();
                 }
@@ -376,8 +399,6 @@ void RemapEngine::onActivated()
                 const int turbo = m_turboButton;
                 if (turbo != 0) {
                     stopTurbo();
-                    // The physical button may still be held; forward a press so it
-                    // behaves normally again now that hyper is released.
                     if ((turbo == BTN_LEFT && m_physLeft) || (turbo == BTN_RIGHT && m_physRight)) {
                         emitEvent(EV_KEY, turbo, 1);
                         sync();
@@ -390,27 +411,4 @@ void RemapEngine::onActivated()
 
         passEvent(ev);
     }
-}
-
-void RemapEngine::onTurboTick()
-{
-    if (m_turboButton == 0) {
-        return;
-    }
-    m_turboPhaseDown = !m_turboPhaseDown;
-    emitEvent(EV_KEY, m_turboButton, m_turboPhaseDown ? 1 : 0);
-    sync();
-}
-
-void RemapEngine::stopTurbo()
-{
-    if (m_turboTimer) {
-        m_turboTimer->stop();
-    }
-    if (m_turboButton != 0 && m_turboPhaseDown) {
-        emitEvent(EV_KEY, m_turboButton, 0);
-        sync();
-    }
-    m_turboButton = 0;
-    m_turboPhaseDown = false;
 }

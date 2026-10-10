@@ -55,7 +55,7 @@ RemapWidget::RemapWidget(libopenrazer::Device *device, QWidget *parent)
     formLayout->addRow(tr("Hyper button:"), hyperCombo);
 
     rateSpin = new QSpinBox(this);
-    rateSpin->setRange(1, 50);
+    rateSpin->setRange(1, 100);
     rateSpin->setSuffix(tr(" /s"));
     formLayout->addRow(tr("Turbo rate:"), rateSpin);
 
