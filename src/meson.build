@@ -21,6 +21,7 @@ razergenie_sources = files([
   'devicewidget/lightingwidget.cpp',
   'devicewidget/performancewidget.cpp',
   'devicewidget/powerwidget.cpp',
+  'devicewidget/remapwidget.cpp',
   'preferences/preferences.cpp',
   'deviceinfodialog.cpp',
   'devicelistwidget.cpp',
@@ -28,6 +29,7 @@ razergenie_sources = files([
   'main.cpp',
   'razergenie.cpp',
   'razerimagedownloader.cpp',
+  'remap/remapengine.cpp',
   'util.cpp',
 ])
 
@@ -43,12 +45,14 @@ processed = qt.preprocess(
     'devicewidget/lightingwidget.h',
     'devicewidget/performancewidget.h',
     'devicewidget/powerwidget.h',
+    'devicewidget/remapwidget.h',
     'preferences/preferences.h',
     'deviceinfodialog.h',
     'devicelistwidget.h',
     'inputremappinginfodialog.h',
     'razergenie.h',
     'razerimagedownloader.h',
+    'remap/remapengine.h',
   ]),
   ui_files : files([
     '../ui/razergenie.ui',

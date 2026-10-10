@@ -9,6 +9,7 @@
 #include "lightingwidget.h"
 #include "performancewidget.h"
 #include "powerwidget.h"
+#include "remapwidget.h"
 
 #include <QLabel>
 #include <QProcess>
@@ -109,6 +110,17 @@ DeviceWidget::DeviceWidget(libopenrazer::Device *device)
         scrollArea->setWidget(widget);
 
         tabWidget->addTab(scrollArea, tr("Power"));
+    }
+
+    /* HyperShift remapping tab */
+    if (RemapWidget::isAvailable(device)) {
+        auto widget = new RemapWidget(device);
+
+        auto scrollArea = new QScrollArea;
+        scrollArea->setWidgetResizable(true);
+        scrollArea->setWidget(widget);
+
+        tabWidget->addTab(scrollArea, tr("Buttons"));
     }
 
     verticalLayout->addWidget(tabWidget);
